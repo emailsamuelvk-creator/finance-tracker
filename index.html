@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#7a2cf2">
+<title>Household Budget</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap">
+<style>
+:root{--h1:#b14cf5;--h2:#7a2cf2;--ink:#1b1530;--muted:#8a8597;--line:#ebe8f2;--bg:#f3f2f8;--surface:#fff;--surface-2:#f1eff7;--bad:#e5484d;--font:"Plus Jakarta Sans",system-ui,-apple-system,sans-serif}
+@media (prefers-color-scheme:dark){:root{--ink:#f1edf8;--muted:#a29cb2;--line:#2e2840;--bg:#121019;--surface:#1c1826;--surface-2:#262133}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:15px/1.45 var(--font)}
+#app{position:fixed;inset:0;width:100%;height:100%;border:0;display:block;background:var(--bg)}
+.gate{min-height:100%;display:flex;flex-direction:column}
+.top{background:linear-gradient(160deg,var(--h1),var(--h2));color:#fff;padding:calc(36px + env(safe-area-inset-top,0px)) 24px 70px;text-align:center}
+.top b{display:block;font-size:1.5rem;font-weight:800}
+.top span{opacity:.9}
+.card{background:var(--surface);border-radius:22px;padding:20px;margin:-46px 16px 24px;max-width:420px;align-self:center;width:calc(100% - 32px);display:flex;flex-direction:column;gap:12px;box-shadow:0 1px 2px rgba(40,20,80,.06)}
+label{font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:700}
+input{width:100%;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);border-radius:12px;padding:12px;font:500 1rem var(--font)}
+button{font-family:inherit;cursor:pointer}
+.btn{border:0;background:linear-gradient(160deg,var(--h1),var(--h2));color:#fff;font-weight:700;font-size:1rem;padding:13px;border-radius:14px;width:100%}
+.btn[disabled]{opacity:.6}
+.link{border:0;background:transparent;color:var(--h2);font-weight:700;font-size:.92rem;padding:6px 0}
+.msg{border-radius:12px;padding:10px 12px;font-size:.9rem;font-weight:600}
+.msg.err{background:color-mix(in srgb,var(--bad) 12%,transparent);color:var(--bad)}
+.msg.ok{background:color-mix(in srgb,#2ec4a0 16%,transparent);color:color-mix(in srgb,#2ec4a0 60%,var(--ink))}
+.note{font-size:.82rem;color:var(--muted);text-align:center}
+.spin{width:26px;height:26px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--h2);margin:40px auto;animation:s 1s linear infinite}
+@keyframes s{to{transform:rotate(360deg)}}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="gate" id="gate">
+  <div class="top"><b>Household Budget</b><span>Beulah and Samuel</span></div>
+  <div class="card" id="card"><div class="spin" aria-label="Loading"></div></div>
+</div>
+<iframe id="app" title="Household Budget" allow="web-share; clipboard-write" hidden></iframe>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script>
+(function(){
+  const $=s=>document.querySelector(s), card=$("#card");
+  const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const cfg=window.HB_FIREBASE;
+  if(!cfg||!cfg.apiKey||/PASTE/.test(cfg.apiKey)){card.innerHTML=`<div class="msg err">Setup isn't finished: add your Firebase settings to firebase-config.js.</div>`;return}
+  firebase.initializeApp(cfg);
+  const auth=firebase.auth(), db=firebase.firestore();
+  db.settings({ignoreUndefinedProperties:true,merge:true});
+  db.enablePersistence({synchronizeTabs:true}).catch(()=>{});
+  let mode="in", note="", busy=false, appInfo={};
+
+  function show(){
+    if(mode==="verify"){const u=auth.currentUser;
+      card.innerHTML=`<div class="msg ok">Almost there. Open the link we sent to <b>${esc(u&&u.email)}</b> to verify your email, then tap Continue.</div>
+        ${note?`<div class="msg err">${esc(note)}</div>`:""}
+        <button class="btn" id="cont">Continue</button><button class="link" id="resend">Send the link again</button><button class="link" id="out">Use a different account</button>`;return}
+    const reset=mode==="reset";
+    card.innerHTML=`${reset?"":`<button class="btn" id="gg" type="button">Sign in with Google</button><div class="note">or use your email and password</div>`}<form id="f" novalidate style="display:flex;flex-direction:column;gap:12px">
+      <div><label for="em">Email</label><input id="em" type="email" autocomplete="username" inputmode="email" required></div>
+      ${reset?"":`<div><label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password" required></div>`}
+      ${note?`<div class="msg ${/sent/i.test(note)?"ok":"err"}">${esc(note)}</div>`:""}
+      <button class="btn" type="submit" ${busy?"disabled":""}>${reset?"Email me a link":busy?"Signing in…":"Sign in"}</button></form>
+      <button class="link" id="sw">${reset?"Back to sign in":"First time or forgot password? Set your password"}</button>
+      ${reset?`<div class="note">We'll email you a link to choose your password. Then come back and sign in.</div>`:""}`;
+    const em=$("#em"); try{em.value=localStorage.getItem("hb_email")||""}catch{}
+  }
+  card.addEventListener("click",async e=>{
+    const t=e.target;
+    if(t.id==="gg"){try{await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider())}catch(err){const c=err&&err.code;if(c!=="auth/popup-closed-by-user"&&c!=="auth/cancelled-popup-request"){note="Google sign-in didn't work. Allow pop-ups for this site and try again.";show()}}return}
+    if(t.id==="sw"){mode=mode==="reset"?"in":"reset";note="";show()}
+    if(t.id==="out"){await auth.signOut()}
+    if(t.id==="resend"){try{await auth.currentUser.sendEmailVerification();note="";card.querySelector(".msg").textContent="Link sent again. Check your inbox and spam."}catch{note="Couldn't send it. Wait a minute and try again.";show()}}
+    if(t.id==="cont"){await auth.currentUser.reload();await auth.currentUser.getIdToken(true);gateUser(auth.currentUser)}
+  });
+  card.addEventListener("submit",async e=>{
+    e.preventDefault(); if(busy) return;
+    const email=$("#em").value.trim().toLowerCase();
+    if(!email){note="Enter your email.";return show()}
+    try{localStorage.setItem("hb_email",email)}catch{}
+    busy=true;note="";
+    if(mode==="reset"){
+      try{await auth.sendPasswordResetEmail(email)}catch{}
+      busy=false;note="If this email is set up, a link has been sent. Check your inbox and spam.";mode="reset";return show();
+    }
+    show();
+    try{await auth.signInWithEmailAndPassword(email,$("#pw").value)}
+    catch(err){busy=false;note=err&&err.code==="auth/too-many-requests"?"Too many tries. Wait a few minutes, or set a new password.":"Email or password isn't right.";show()}
+  });
+
+  async function loadApp(){
+    card.innerHTML=`<div class="spin" aria-label="Loading"></div>`;
+    let html="", d=null;
+    try{const s=await db.doc("app/current").get();d=s.exists?s.data():null}
+    catch(err){
+      if(err&&err.code==="permission-denied"){note="This account isn't allowed to open the budget.";await auth.signOut();return}
+      d=null;
+    }
+    let hasPrev=false; try{hasPrev=(await db.doc("app/previous").get()).exists}catch{}
+    if(d&&d.html){html=d.html;appInfo={source:"uploaded",by:d.by,at:d.at,name:d.name,hasPrev}}
+    else{
+      try{const r=await fetch("app.html",{cache:"no-cache"});html=r.ok?await r.text():""}catch{}
+      appInfo={source:"github",hasPrev};
+    }
+    if(!html){card.innerHTML=`<div class="msg err">Couldn't load the app. Check your connection and reload.</div>`;return}
+    window.HB.appHtml=html; window.HB.appInfo=appInfo;
+    const f=$("#app"); f.srcdoc=html; f.hidden=false; $("#gate").hidden=true;
+  }
+  function gateUser(u){
+    if(!u){$("#app").hidden=true;$("#app").srcdoc="";$("#gate").hidden=false;busy=false;mode="in";show();return}
+    if(!u.emailVerified){mode="verify";$("#gate").hidden=false;$("#app").hidden=true;
+      if(!sessionStorage.getItem("hb_vsent")){u.sendEmailVerification().catch(()=>{});try{sessionStorage.setItem("hb_vsent","1")}catch{}}
+      return show()}
+    busy=false;loadApp();
+  }
+  window.HB={db,
+    user:()=>auth.currentUser,
+    signOut:()=>auth.signOut(),
+    usesGoogle:()=>{const u=auth.currentUser;return !!u&&u.providerData.some(p=>p.providerId==="google.com")},
+    reauth:pw=>{const u=auth.currentUser;if(u.providerData.some(p=>p.providerId==="google.com"))return Promise.resolve();return u.reauthenticateWithCredential(firebase.auth.EmailAuthProvider.credential(u.email,pw))},
+    async saveApp(html,name){
+      const u=auth.currentUser, cur=await db.doc("app/current").get();
+      const batch=db.batch();
+      if(cur.exists) batch.set(db.doc("app/previous"),cur.data());
+      batch.set(db.doc("app/current"),{html,name:String(name||"").slice(0,80),by:u.email,at:new Date().toISOString(),size:html.length});
+      await batch.commit();
+    },
+    async undoApp(){const p=await db.doc("app/previous").get();if(!p.exists)throw new Error("none");const b=db.batch();b.set(db.doc("app/current"),p.data());b.delete(db.doc("app/previous"));await b.commit()},
+    async resetApp(){const cur=await db.doc("app/current").get();const b=db.batch();if(cur.exists)b.set(db.doc("app/previous"),cur.data());b.delete(db.doc("app/current"));await b.commit()},
+    reload:()=>location.reload(),
+    appHtml:"", appInfo:{}
+  };
+  auth.onAuthStateChanged(gateUser);
+})();
+</script>
+</body>
+</html>
