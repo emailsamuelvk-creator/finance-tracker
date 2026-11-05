@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#7a2cf2">
-<title>Household Budget</title>
+<title>Finance Tracker</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap">
 <style>
 :root{--h1:#b14cf5;--h2:#7a2cf2;--ink:#1b1530;--muted:#8a8597;--line:#ebe8f2;--bg:#f3f2f8;--surface:#fff;--surface-2:#f1eff7;--bad:#e5484d;--font:"Plus Jakarta Sans",system-ui,-apple-system,sans-serif}
@@ -34,10 +34,10 @@ button{font-family:inherit;cursor:pointer}
 </head>
 <body>
 <div class="gate" id="gate">
-  <div class="top"><b>Household Budget</b><span>Beulah and Samuel</span></div>
+  <div class="top"><b>Finance Tracker</b><span>Private · approved accounts only</span></div>
   <div class="card" id="card"><div class="spin" aria-label="Loading"></div></div>
 </div>
-<iframe id="app" title="Household Budget" allow="web-share; clipboard-write" hidden></iframe>
+<iframe id="app" title="Finance Tracker" allow="web-share; clipboard-write" hidden></iframe>
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
@@ -47,85 +47,74 @@ button{font-family:inherit;cursor:pointer}
 (function(){
   const $=s=>document.querySelector(s), card=$("#card");
   const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const ALLOWED=["beulahsteephen@gmail.com","emailsamuelvk@gmail.com"];
   const cfg=window.HB_FIREBASE;
-  if(!cfg||!cfg.apiKey||/PASTE/.test(cfg.apiKey)){card.innerHTML=`<div class="msg err">Setup isn't finished: add your Firebase settings to firebase-config.js.</div>`;return}
+  if(!cfg||!cfg.apiKey||/PASTE/.test(cfg.apiKey)){card.innerHTML=`<div class="msg err">Setup isn't finished.</div>`;return}
   firebase.initializeApp(cfg);
   const auth=firebase.auth(), db=firebase.firestore();
   db.settings({ignoreUndefinedProperties:true,merge:true});
   db.enablePersistence({synchronizeTabs:true}).catch(()=>{});
-  let mode="in", note="", busy=false, appInfo={};
+  let note="", busy=false, appInfo={}, up="";
+  // Front-door check only. The real lock is the Firestore rule, enforced on Google's servers.
+  const okUser=u=>!!u&&u.emailVerified===true&&ALLOWED.includes(String(u.email||"").toLowerCase())&&u.providerData.some(p=>p.providerId==="google.com");
 
-  function show(){
-    if(mode==="verify"){const u=auth.currentUser;
-      card.innerHTML=`<div class="msg ok">Almost there. Open the link we sent to <b>${esc(u&&u.email)}</b> to verify your email, then tap Continue.</div>
-        ${note?`<div class="msg err">${esc(note)}</div>`:""}
-        <button class="btn" id="cont">Continue</button><button class="link" id="resend">Send the link again</button><button class="link" id="out">Use a different account</button>`;return}
-    const reset=mode==="reset";
-    card.innerHTML=`${reset?"":`<button class="btn" id="gg" type="button">Sign in with Google</button><div class="note">or use your email and password</div>`}<form id="f" novalidate style="display:flex;flex-direction:column;gap:12px">
-      <div><label for="em">Email</label><input id="em" type="email" autocomplete="username" inputmode="email" required></div>
-      ${reset?"":`<div><label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password" required></div>`}
-      ${note?`<div class="msg ${/sent/i.test(note)?"ok":"err"}">${esc(note)}</div>`:""}
-      <button class="btn" type="submit" ${busy?"disabled":""}>${reset?"Email me a link":busy?"Signing in…":"Sign in"}</button></form>
-      <button class="link" id="sw">${reset?"Back to sign in":"First time or forgot password? Set your password"}</button>
-      ${reset?`<div class="note">We'll email you a link to choose your password. Then come back and sign in.</div>`:""}`;
-    const em=$("#em"); try{em.value=localStorage.getItem("hb_email")||""}catch{}
+  function showLogin(){
+    card.innerHTML=`<button class="btn" id="gg" ${busy?"disabled":""}>Sign in with Google</button>
+      ${note?`<div class="msg err">${esc(note)}</div>`:""}
+      <div class="note">Only the two approved Google accounts can open this.</div>`;
   }
   card.addEventListener("click",async e=>{
-    const t=e.target;
-    if(t.id==="gg"){try{await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider())}catch(err){const c=err&&err.code;if(c!=="auth/popup-closed-by-user"&&c!=="auth/cancelled-popup-request"){note="Google sign-in didn't work. Allow pop-ups for this site and try again.";show()}}return}
-    if(t.id==="sw"){mode=mode==="reset"?"in":"reset";note="";show()}
-    if(t.id==="out"){await auth.signOut()}
-    if(t.id==="resend"){try{await auth.currentUser.sendEmailVerification();note="";card.querySelector(".msg").textContent="Link sent again. Check your inbox and spam."}catch{note="Couldn't send it. Wait a minute and try again.";show()}}
-    if(t.id==="cont"){await auth.currentUser.reload();await auth.currentUser.getIdToken(true);gateUser(auth.currentUser)}
-  });
-  card.addEventListener("submit",async e=>{
-    e.preventDefault(); if(busy) return;
-    const email=$("#em").value.trim().toLowerCase();
-    if(!email){note="Enter your email.";return show()}
-    try{localStorage.setItem("hb_email",email)}catch{}
-    busy=true;note="";
-    if(mode==="reset"){
-      try{await auth.sendPasswordResetEmail(email)}catch{}
-      busy=false;note="If this email is set up, a link has been sent. Check your inbox and spam.";mode="reset";return show();
+    if(e.target.id==="gg"){
+      if(busy) return; busy=true; note=""; showLogin();
+      try{const p=new firebase.auth.GoogleAuthProvider();p.setCustomParameters({prompt:"select_account"});await auth.signInWithPopup(p)}
+      catch(err){const c=err&&err.code;if(c!=="auth/popup-closed-by-user"&&c!=="auth/cancelled-popup-request")note="Google sign-in didn't work. Allow pop-ups for this site and try again."}
+      busy=false; if(!auth.currentUser) showLogin();
     }
-    show();
-    try{await auth.signInWithEmailAndPassword(email,$("#pw").value)}
-    catch(err){busy=false;note=err&&err.code==="auth/too-many-requests"?"Too many tries. Wait a few minutes, or set a new password.":"Email or password isn't right.";show()}
+    if(e.target.id==="out"){await auth.signOut()}
+    if(e.target.id==="retry"){loadApp()}
   });
-
+  card.addEventListener("change",async e=>{
+    if(e.target.id!=="upf") return;
+    const f=e.target.files&&e.target.files[0]; if(!f) return;
+    if(f.size>900000){up="That file is too large (max 900 KB).";return showUpload()}
+    const html=await f.text();
+    if(!html.includes('name="hb-app" content="household-budget"')){up="That isn't a Finance Tracker app file.";return showUpload()}
+    card.innerHTML=`<div class="spin" aria-label="Uploading"></div>`;
+    try{await window.HB.saveApp(html,f.name);location.reload()}catch{up="Couldn't upload. Check your connection and try again.";showUpload()}
+  });
+  function showUpload(){
+    card.innerHTML=`<div class="note" style="color:var(--ink)">Welcome. Choose the Finance Tracker app file (.html) to install it.</div>
+      ${up?`<div class="msg err">${esc(up)}</div>`:""}
+      <input id="upf" type="file" accept=".html,text/html">
+      <button class="link" id="out">Sign out</button>`;
+  }
   async function loadApp(){
     card.innerHTML=`<div class="spin" aria-label="Loading"></div>`;
-    let html="", d=null;
+    let d=null, hasPrev=false;
     try{const s=await db.doc("app/current").get();d=s.exists?s.data():null}
     catch(err){
-      if(err&&err.code==="permission-denied"){note="This account isn't allowed to open the budget.";await auth.signOut();return}
-      d=null;
+      if(err&&err.code==="permission-denied"){note="This account isn't allowed to open Finance Tracker.";await auth.signOut();return}
+      card.innerHTML=`<div class="msg err">Couldn't load. Check your connection.</div><button class="btn" id="retry">Try again</button>`;return;
     }
-    let hasPrev=false; try{hasPrev=(await db.doc("app/previous").get()).exists}catch{}
-    if(d&&d.html){html=d.html;appInfo={source:"uploaded",by:d.by,at:d.at,name:d.name,hasPrev}}
-    else{
-      try{const r=await fetch("app.html",{cache:"no-cache"});html=r.ok?await r.text():""}catch{}
-      appInfo={source:"github",hasPrev};
-    }
-    if(!html){card.innerHTML=`<div class="msg err">Couldn't load the app. Check your connection and reload.</div>`;return}
-    window.HB.appHtml=html; window.HB.appInfo=appInfo;
-    const f=$("#app"); f.srcdoc=html; f.hidden=false; $("#gate").hidden=true;
+    try{hasPrev=(await db.doc("app/previous").get()).exists}catch{}
+    if(!(d&&d.html)){showUpload();return}
+    appInfo={source:"uploaded",by:d.by,at:d.at,name:d.name,hasPrev};
+    window.HB.appHtml=d.html; window.HB.appInfo=appInfo;
+    const f=$("#app"); f.srcdoc=d.html; f.hidden=false; $("#gate").hidden=true;
   }
   function gateUser(u){
-    if(!u){$("#app").hidden=true;$("#app").srcdoc="";$("#gate").hidden=false;busy=false;mode="in";show();return}
-    if(!u.emailVerified){mode="verify";$("#gate").hidden=false;$("#app").hidden=true;
-      if(!sessionStorage.getItem("hb_vsent")){u.sendEmailVerification().catch(()=>{});try{sessionStorage.setItem("hb_vsent","1")}catch{}}
-      return show()}
-    busy=false;loadApp();
+    if(!u){$("#app").hidden=true;$("#app").srcdoc="";$("#gate").hidden=false;busy=false;showLogin();return}
+    if(!okUser(u)){note="This Google account isn't approved for Finance Tracker.";auth.signOut();return}
+    loadApp();
   }
   window.HB={db,
     user:()=>auth.currentUser,
     signOut:()=>auth.signOut(),
-    usesGoogle:()=>{const u=auth.currentUser;return !!u&&u.providerData.some(p=>p.providerId==="google.com")},
-    reauth:pw=>{const u=auth.currentUser;if(u.providerData.some(p=>p.providerId==="google.com"))return Promise.resolve();return u.reauthenticateWithCredential(firebase.auth.EmailAuthProvider.credential(u.email,pw))},
+    usesGoogle:()=>true,
+    reauth:()=>Promise.resolve(),
     async saveApp(html,name){
-      const u=auth.currentUser, cur=await db.doc("app/current").get();
-      const batch=db.batch();
+      const u=auth.currentUser; if(!okUser(u)) throw new Error("not allowed");
+      const cur=await db.doc("app/current").get(), batch=db.batch();
       if(cur.exists) batch.set(db.doc("app/previous"),cur.data());
       batch.set(db.doc("app/current"),{html,name:String(name||"").slice(0,80),by:u.email,at:new Date().toISOString(),size:html.length});
       await batch.commit();
